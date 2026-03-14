@@ -5,11 +5,10 @@ import helion
 import helion.language as hl
 
 
-# NOTE: This is an intentionally inefficient baseline implementation.
 @helion.kernel(
     static_shapes=True,
     dot_precision="ieee",
-    config=helion.Config(block_sizes=[], num_warps=1, num_stages=1),
+    config=helion.Config(block_sizes=[], num_warps=8, num_stages=2),
 )
 def gated_chunk_attn(
     q: torch.Tensor,     # [B, T, H, K]
@@ -37,19 +36,13 @@ def gated_chunk_attn(
         q_s = q[b_idx, tile_t, h_idx, :] * torch.exp(g_vals)[:, None]
         k_s = k[b_idx, tile_t, h_idx, :] * torch.exp(-g_vals)[:, None]
 
-        sim1 = hl.dot(q_s, k_s.T)
-        sim2 = hl.dot(q_s, k_s.T)
-        sim = (sim1 + sim2) * 0.5
+        sim = hl.dot(q_s, k_s.T)
         idx = hl.arange(tile_t.block_size)
         mask = idx[:, None] >= idx[None, :]
         sim = torch.where(mask, sim, 0.0)
-        local1 = hl.dot(sim.to(v.dtype), v[b_idx, tile_t, h_idx, :])
-        local2 = hl.dot(sim.to(v.dtype), v[b_idx, tile_t, h_idx, :])
-        local_out = (local1 + local2) * 0.5
+        local_out = hl.dot(sim.to(v.dtype), v[b_idx, tile_t, h_idx, :])
 
-        glob1 = hl.dot(q_s, h[b_idx, c_idx, h_idx, :, :])
-        glob2 = hl.dot(q_s, h[b_idx, c_idx, h_idx, :, :])
-        global_out = (glob1 + glob2) * 0.5
+        global_out = hl.dot(q_s, h[b_idx, c_idx, h_idx, :, :])
 
         out[b_idx, tile_t, h_idx, :] = ((global_out + local_out) * scale).to(out.dtype)
 
